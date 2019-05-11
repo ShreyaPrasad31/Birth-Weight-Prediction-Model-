@@ -1,0 +1,148 @@
+---
+title: "Data Preprocessing"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+births <- read.csv("chds_births.csv")
+meth.names <- c('Caucasian','Caucasian','Caucasian','Caucasian','Caucasian','Caucasian', 'Mexican', 'African-American', 'Asian', 'Mixed', 'Other')
+med.names <- c('elementary', 'middle', 'hs', 'hs + trade', 'hs + college', 'college', 'trade', 'unclear')
+feth.names <- c('Caucasian','Caucasian','Caucasian','Caucasian','Caucasian','Caucasian', 'Mexican', 'African-American', 'Asian', 'Mixed', 'Other')
+fed.names <- c('elementary', 'middle', 'hs', 'hs + trade', 'hs + college', 'college', 'trade', 'unclear')
+marital.names <- c(NA, 'married', 'separated', 'divorced', 'widowed', 'never married')
+income.names <- c('<2500', '2500-4999', '5000-7499', '7500-9999', '10000-12499', '12500-14999', '15000-17499', '20000-22499', '>22500')
+smoke.names <- c('never', 'now', 'until pregnancy', 'used to')
+time.names <- c('never', 'still smokes', 'during pregnancy', 'less than a year', '1-2yrs', '2-3yrs', '3-4yrs', '5-9yrs', '10+yrs', 'quit - unknown then')
+number.names <- c('never', '1-4', '5-9', '10-14', '15-19', '20-29', '30-39', '40-60', '>60', 'smoked, amount unknown')
+
+births$meth <- meth.names[births$meth + 1]
+births$feth<- feth.names[births$feth + 1]
+births$fed <- fed.names[births$fed + 1]
+births$marital <- marital.names[births$marital+1]
+births$income <- income.names[births$income + 1]
+births$smoke <- smoke.names[births$smoke + 1]
+births$time <- time.names[births$time + 1]
+births$number <- number.names[births$number + 1]
+summary(births)
+```
+## Initial Model
+
+### Variables to definitely include
+\begin{enumerate}
+\item gestation
+\item parity
+\item time
+\item number
+\item smoke
+\item martial
+\item fed
+\item med
+\end{enumerate}
+
+### Variables to consider including
+\begin{enumerate}
+\item meth
+\item feth
+\item mage/fage (not both -- correlated)
+\item mht/mwt (slightly correlated so probably not both -- mwt might be better)
+\end{enumerate}
+
+### Non-linear effects/ other modifications to covariates
+\begin{itemize}
+\item change grouping of smoke: group 0 and 3 together; 1 and 2 together to form "never/used to" and "now/until pregnancy"
+\item change grouping of med/fed: (0, 1, 7) becomes group "no highschool/ highschool unclear", (3, 6) -> trade, (4, 5) -> college [the latter 2 groupings are relevant for fed more than med]
+\item income* (have to fix with imputation first)
+\end{itemize}
+
+
+### Forward Selection using just the variables in "to include"
+```{r}
+keeps <- c("wt", "gestation", "parity", "time", "number", "smoke", "marital", "fed", "med", "mwt", "mht")
+birth.data <- births[keeps]
+birth.data <- na.omit(birth.data)
+print(dim(birth.data))
+M0 <- lm(wt ~ 1, data = birth.data)
+Mmax <- lm(wt ~ gestation + parity + time + number+ smoke + fed, data=birth.data)
+Mstart <- lm(wt ~ gestation + parity + smoke + fed, data=birth.data)
+MgestPar <- lm(wt ~ gestation + parity + I(gestation*parity) + smoke + fed, data = birth.data)
+Mbio1 <- lm(wt ~ gestation + parity + mwt + mht + I(mwt*mht^2) + I(gestation*parity) + time, data = birth.data)
+Mbio2 <- lm(wt ~ gestation + parity + mwt + mht + I(mwt*mht^2) + I(gestation*parity) + smoke, data = birth.data)
+Mbio3 <- lm(wt ~ gestation + parity + mwt + mht + I(mwt*mht^2) + I(gestation*parity) + number, data = birth.data)
+MbioBMI <- lm(wt ~ gestation + parity + mwt + mht + I(mwt*703/mht^2) + I(gestation*parity) + number, data = birth.data)
+bmi <- birth.data$mwt*703/(birth.data$mht)^2
+bmiLB <- bmi - 18.5
+bmiUB <- 24.9 - bmi
+birth.data$bmiLB <- bmiLB
+birth.data$bmiUB <- bmiUB
+MbioBMICenteredUB <- lm(wt ~ gestation + parity + mwt + mht + bmiUB + number, data = birth.data)
+MbioBMICenteredLB <- lm(wt ~ gestation + parity + mwt + mht + bmiLB + number, data = birth.data)
+MbioBMICentered <- lm(wt ~ gestation + parity + I(gestation*parity) + bmiUB + number, data = birth.data)
+ntot <- dim(birth.data)[1]
+ntrain <- 1000
+set.seed(5)
+train.ind <- sample(ntot, ntrain)
+
+M0 <- update(M0, subset = train.ind)
+Mmax <- update(Mmax, subset = train.ind)
+Mstart <- update(Mstart, subset = train.ind)
+```
+```{r}
+# forward selection
+Mfwd <- step(object = M0, # starting point model
+scope = list(lower = M0, upper = Mmax), # smallest and largest model
+direction = "forward", 
+trace = FALSE) # trace prints out information
+print(Mfwd$call)
+```
+```{r}
+# backward elimiation
+Mback <- step(object = Mmax, # starting point model
+scope = list(lower = M0, upper = Mmax),
+direction = "backward", trace = FALSE)
+print(Mback$call)
+```
+```{r}
+# stepwise selection (both directions)
+Mstep <- step(object = Mstart,
+scope = list(lower = M0, upper = Mmax),
+direction = "both", trace = FALSE)
+print(Mstep$call)
+```
+
+The MSPE for training set of 1000, seed=5, omit NA is 
+```{r}
+print(Mfwd$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mfwd, newdata = birth.data[-train.ind,]))^2))
+print(Mback$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mback, newdata = birth.data[-train.ind,]))^2))
+print(Mstep$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mstep, newdata = birth.data[-train.ind,]))^2))
+print(Mstart$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mstart, newdata = birth.data[-train.ind,]))^2))
+print(MgestPar$call)
+print(sum((birth.data$wt[-train.ind] - predict(MgestPar, newdata = birth.data[-train.ind,]))^2))
+print(Mbio1$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mbio1, newdata = birth.data[-train.ind,]))^2))
+
+print(Mbio2$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mbio2, newdata = birth.data[-train.ind,]))^2))
+
+print(Mbio3$call)
+print(sum((birth.data$wt[-train.ind] - predict(Mbio3, newdata = birth.data[-train.ind,]))^2))
+
+print(MbioBMI$call)
+print(sum((birth.data$wt[-train.ind] - predict(MbioBMI, newdata = birth.data[-train.ind,]))^2))
+
+print(MbioBMICentered$call)
+print(sum((birth.data$wt[-train.ind] - predict(MbioBMICentered, newdata = birth.data[-train.ind,]))^2))
+
+print(MbioBMICenteredLB$call)
+print(sum((birth.data$wt[-train.ind] - predict(MbioBMICenteredLB, newdata = birth.data[-train.ind,]))^2))
+
+print(MbioBMICenteredUB$call)
+print(sum((birth.data$wt[-train.ind] - predict(MbioBMICenteredUB, newdata = birth.data[-train.ind,]))^2))
+```

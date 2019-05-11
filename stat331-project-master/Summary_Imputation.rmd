@@ -1,0 +1,89 @@
+---
+title: "Data Imputation for Income"
+output: pdf_document
+---
+
+# Summary
+This report summarizes the statistical modeling and analysis results associated with the birth data on 1236 healthy male single-fetus births. The purpose of this project was to explore the relation between the healthy male single-fetus birth weight and the explanatory variables using the analysis techniques learnt in Stat 331. The first part of the analysis was to pre diagnose the data, exclude covariates with large amounts of missing data or obvious poor relations with the dependent variable while adding interaction effects we think might help increase the explanatory power of the model. Next, we imputed data for the “income” covariate using the “mice” library. Automatic Model Selection was then performed.  
+Stratified random sampling with optimal allocation was used to prevent the situation where the training set did not contain data from all categories. Once the training set was determined in this manner, forwards, backwards, and stepwise selection was used to determine a candidate model. The second candidate model was created manually and refined by removing insignificant covariates. 
+Post automatic model selection , we arrived at two candidate models. One through automatic model selection and the other through judgement. Various tests including VIF, AIC, PRESS statistic, K-fold cross validation were performed for model selection, the better model being the one with the lower value of mean squared predictive error on the testing data. It was found that the automatic model had a predictive advantage over the manually selected  model.
+
+
+```{r  include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=3)
+knitr::opts_chunk$set(echo=FALSE)
+options(warn = -1)
+```
+
+## Missing Data and Imputation
+The imputed data functions are dependent on the libraries VIM and mice
+```{r include=FALSE}
+#Reading in the data 
+fdata <- read.csv("chds_births.csv")
+#Calculat the number of missing valuesin each column 
+na_count <- sapply(fdata, function(y) sum(length(which(is.na(y)))))
+na.count <- data.frame(na_count)
+#Check the columns that have more than 10% of the data missing 
+count <- sapply(fdata, function(y) length(y))
+na_percent <- (na_count/count)*100
+na_percent <- data.frame(na_percent)
+```
+Visualizing the missing data
+```{r  include = FALSE}
+library(VIM)
+```
+```{r results = 'hide' }
+miss_plot <- aggr(fdata, col=c('navyblue','yellow'),
+                    numbers=TRUE, sortVars=TRUE,
+                    labels=names(fdata), cex.axis=.7,
+                    gap=3, ylab=c("Missing data","Pattern"))
+```
+
+Looking the the above data frame, we might want to remove or impute values into the following features of the data, fwt : Fathers Weight,fht : Fathers Height, income : Fathers Income
+Since imputting may not work for fathers height and weight, we will remove those features from our data. Logically, it makes sense for the baby's weight to not depend significantly on these features.
+```{r include=FALSE}
+fdata$fht <- NULL
+fdata$fwt <- NULL 
+#colnames(fdata)
+```
+Using the mice library, we perform imputation for the income covariate
+```{r include=FALSE}
+library(mice)
+#Imputting the data with "pmm" method as referenced from "https://stefvanbuuren.name/mice/"
+imp <- mice(fdata, m = 5, meth = 'pmm', seed = 500)
+```
+
+```{r echo = FALSE}
+densityplot(imp)
+```
+
+Blue - observed values   Magenta - imputed values 
+
+From the density plot, we can say that imputed values are indeed plausible for the income covariate.
+
+```{r}
+imp_1 <- data.frame(complete(imp,1))
+imp_2 <- data.frame(complete(imp,2))
+imp_3 <- data.frame(complete(imp,3))
+imp_4 <- data.frame(complete(imp,4))
+imp_5 <- data.frame(complete(imp,5))
+```
+Since the imputted values for income for all the imputed data sets follow a similar distribution, we choose imputed dataset 1, since it
+has the smallest difference in the means when compared the observed data
+```{r}
+cm1 <- sapply(fdata, mean, na.rm = T) - sapply(imp_1, mean)
+cm2 <- sapply(fdata, mean, na.rm = T) - sapply(imp_2, mean)
+cm3 <- sapply(fdata, mean, na.rm = T) - sapply(imp_3, mean)
+cm4 <- sapply(fdata, mean, na.rm = T) - sapply(imp_4, mean)
+cm5 <- sapply(fdata, mean, na.rm = T) - sapply(imp_5, mean)
+sum_imp_data <- c(sum(cm1), sum(cm2), sum(cm3), sum(cm4), sum(cm5))
+abs(sum_imp_data)
+```
+We choose to include the imputed income data from imputed dataset 1 into our original dataset and then carry our model diagnostics and selection. 
+```{r}
+#Get sample 1 income values
+imputed_income <- imp_1$income
+fdata$income <- imputed_income
+```
+
+

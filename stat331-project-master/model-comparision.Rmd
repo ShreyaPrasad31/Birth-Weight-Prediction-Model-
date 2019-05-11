@@ -1,0 +1,211 @@
+---
+output: pdf_document
+---
+ \setcounter{page}{8}
+ 
+# Model Diagnostics
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.width=6, fig.height=3) 
+source("setup.R")
+options(warn=-1)
+```
+```{r, include=FALSE}
+# Automatic
+M.auto <- lm(formula = wt ~ mage + I(mwt * 703/(mht)^2) + smoke + mht + meth + I(gestation * mage) + I(gestation * parity), data = birth.data,
+subset = train.ind)
+
+#Manual Selection 
+M.manual <- lm(formula = wt ~ gestation + mht + smoke + I(gestation * parity) + parity, data = birth.data, subset = train.ind)
+zres <- residuals(M.auto)
+sig.hat <- sqrt(sum(zres^2)/(length(zres)-2))
+zres <- zres/sig.hat
+```
+
+## Residual Plots
+### Model 1 (Selected via Automated Model Selection)
+```{r}
+#residuals vs. fitted values
+par(mfrow = c(1,2))
+plot(predict(M.auto), residuals(M.auto), xlab="Fitted", ylab="Residual", main="Residuals vs. Fitted Values")
+abline(h = 0, col = "red", lty = 2) #horizontal line
+
+#standardize residuals
+qqnorm(zres, main = "QQ-Plot")
+qqline(zres, col='red', lty = 2)
+```
+
+From the residuals vs. fitted values plot, we can see that the conditional mean of the response ($weight_i$) is a linear function. We can also see that the conditional variance of $weight_i$ is constant. From the QQ-plot, we can see that the errors are iid normals. Hence, from these two plots we can conclude that Model 1 satisfies the linear regression model assumptions.
+
+### Model 2 (Selected via Manual Model Selection)
+```{r, include=FALSE}
+zres <- residuals(M.manual)
+sig.hat <- sqrt(sum(zres^2)/(length(zres)-2))
+zres <- zres/sig.hat
+```
+```{r}
+#residuals vs. fitted values
+par(mfrow = c(1,2))
+plot(predict(M.manual), residuals(M.manual), xlab="Fitted", ylab="Residual", main="Residuals vs. Fitted Values")
+abline(h = 0, col = "red", lty = 2) #horizontal line
+#standardize residuals
+qqnorm(zres, main = "QQ-Plot")
+qqline(zres, col='red', lty = 2)
+```
+
+From the residuals vs. fitted values plot, we can see that the conditional mean of the response ($weight_i$) is a linear function. We can also see that the conditional variance of $weight_i$ is constant. From the QQ-plot, we can see that the errors are iid normals. Hence, from these two plots we can conclude that Model 2 satisfies the linear regression model assumptions.
+
+## K-fold cross-validation
+We used the k-fold cross validation to compare the two models(Automatic and Manual). We partitioned the original data into k (10) equal subsets. Then, we trainied each of our models on k-1 folds of the data, which formed the training sets.The accuracy of our models was calculated by validating the predicted results for the kth fold, which formed the test set. The model with a lower value of $\textbf{MSPE}$ (Mean Squared Predictive Error) was chosen due to higher predictive accuracy. 
+```{r, include=FALSE}
+set.seed(2)
+require(caret)
+```
+```{r}
+#We use the caret library to perform K fold cross validation
+#Create the indices for the k folds, with 2/3rd of the data #being used as the training set
+ind= createDataPartition(birth.data$wt, p = 2/3, list = FALSE )
+#Using the train.ind from the above function, we can calculate the training and testing set
+trainDF <- birth.data[ind, ]
+testDF <- birth.data[-ind, ]
+
+#The ControlParameters specify the cross fold validation method for 5 folds 
+ControlParameters <- trainControl(method = "cv", 
+number = 10, savePredictions = TRUE, classProbs = TRUE)
+
+#Cross Validation for the first model, which was selected through automatic model selection.  
+#Training the model on the training set using the specified control parameters 
+M.auto_train <- train(wt ~ parity + time + mage 
++ mht + I(mwt * 703/(mht)^2) + I(gestation * mage) +  meth, 
+data = trainDF, method = "lm",trControl  = ControlParameters, na.action = na.omit)
+
+#Predictions on the test data from the automatic model
+M.auto_predictions <- predict(M.auto_train, testDF)
+
+#Observed values of weight for the test data indices
+observed_data_test <-  birth.data[-ind,]$wt
+
+#Calculate the MPSE
+M.auto_mspe <- sum((M.auto_predictions - observed_data_test)^2)
+
+#For Manual model 
+#Cross Validation for the second model, which was manually selected  
+#We can use the same control parameters 
+#Training the model on the training set using the specified control parameters 
+M.manual_train <- train(wt ~ gestation + mht + smoke + I(gestation*parity) + 
+parity + number +income, data = trainDF, 
+method = "lm",trControl  = ControlParameters, na.action = na.omit)
+
+#Predictions on the test data from the manual data
+M.manual_predictions <- predict(M.manual_train, testDF)
+
+#Calculate the MPSE
+M.manual_mspe <- sum((M.manual_predictions - observed_data_test)^2)
+#Display nicely
+signif(c(Auto_model = M.auto_mspe, Manual_model = M.manual_mspe))
+```
+Looking at the two MSPE values we can say that the model selected through automatic model selection is better since it has a lower value of MSPE on the testing data.
+
+## Leverege and Influence measures
+### Model 1
+```{r, echo=FALSE}
+Leverage <- hat(model.matrix(M.auto))
+h <- hatvalues(M.auto)
+n<-nobs(M.auto)
+#cook's distance vs. leverage
+D <- cooks.distance(M.auto)
+infl.ind <- which.max(D)
+hbar <- length(coef(M.auto))/n
+lev.ind <- h > 2*hbar
+clrs <- rep("black", len=n)
+clrs[lev.ind] <- "blue"
+clrs[infl.ind] <- "red"
+par(mfrow = c(1, 1))
+cex <- .8
+```
+```{r}
+plot(h, D, xlab = "Leverage", ylab="Cook's Influence Measure", pch=21, bg=clrs, 
+     cex=cex, cex.axis = cex)
+abline(v=2*hbar, col="grey", lty=2)
+legend("topleft", legend=c("High Leverage", "High Influence"), pch = 21, pt.bg = c("blue", "red"), cex=cex, pt.cex = cex)
+```
+
+In this graph, we can see that there is one point which has high influence according to Cook's Influence Measure (in red). There are several blue points, which are points that have high leverage. The point with the highest influence is:
+
+```{r}
+print(birth.data[infl.ind,])
+```
+So the parity, mother's age and mother's weight are greater than the mean values (`r signif(mean(birth.data[, "parity"]), 2)`,`r signif(mean(birth.data[, "mage"]), 2)`, `r signif(mean(birth.data[, "mwt"]), 2)` respectively) which would explain why this is a high-influence point.
+
+### Model 2
+```{r, include=FALSE}
+Leverage <- hat(model.matrix(M.manual))
+h <- hatvalues(M.manual)
+n<-nobs(M.manual)
+#cook's distance vs. leverage
+D <- cooks.distance(M.manual)
+infl.ind <- which.max(D)
+hbar <- length(coef(M.manual))/n
+lev.ind <- h > 2*hbar
+clrs <- rep("black", len=n)
+clrs[lev.ind] <- "blue"
+clrs[infl.ind] <- "red"
+par(mfrow = c(1, 1))
+cex <- .8
+```
+```{r}
+plot(h, D, xlab = "Leverage", ylab="Cook's Influence Measure", pch=21, bg=clrs, cex=cex, cex.axis = cex)
+abline(v=2*hbar, col="grey", lty=2)
+```
+
+In this graph, we can see that there is one point which has high influence according to Cook's Influence Measure (in red). There are several blue points, which are points that have high leverage, however these points are less spread out than in Model 1. The point with the highest influence is:
+
+```{r}
+print(birth.data[infl.ind,])
+```
+Here, the mother's age is significantly lower than the mean age, which would explain why the point is of greatest influence. 
+
+## AIC
+The AIC estimates the quality of each model, relative to the other model. The larger the difference in AIC, indicates stronger evidence for one model over the other. 
+In this case, we want to compare two models. If $AIC_{1}$ < $AIC_{2}$ then model 1 would be preferred over model 2.
+
+``` {r}
+# models to compare
+M1 <- M.auto
+M2 <- M.manual
+AIC(M1)
+AIC(M2)
+```
+
+Since model 1(automatic model) has lower AIC than model 2 (Manually selected), we can say that using model 1 has a greater predictive advantage over model 2. 
+
+##PRESS Statistic 
+Press statistic is a form of cross validation to provide a summary measure of the fit of a model to our training set. It should be noted that the training and test set are disjoint. In general, the smaller the PRESS value, the better the model's predictive ability. 
+
+```{r}
+# models to compare
+M1 <- M.auto
+M2 <- M.manual
+# PRESS statistics
+press1 <- resid(M1)/(1-hatvalues(M1)) # M1
+press2 <- resid(M2)/(1-hatvalues(M2)) # M2
+# plot PRESS statistics
+boxplot(x = list(abs(press1), abs(press2)), names = c("Automatic", "Manual")
+,ylab = expression(group("|", PRESS[i], "|")),
+col = c("yellow", "orange"))
+```
+
+We can see that the results for the sum of squared PRESS residuals for the two models are consistent with the cross-validation results,
+giving a bit of a predictive advantage to the automatic model (Model 1). 
+
+#Discussion
+The final model used following covariates: mother's age, mother's body-mass index, smoke, mother's height, mother's ethnicity, interaction between mother's age and gestation, and interaction between parity and gestation. As determined in the previous section, the model does not seem to violate any of the regression assumptions. There was a point with great influence corresponding to an overweight 38 year old woman. However it would not be wise to exclude it as an "outlier" since there is no justification for why the model would not be able to predict the birth weight of 38-year old mothers. 
+
+As discussed in the model selection section, the covariate with the smallest $p$-value, and hence the most significant (in the presence of the other covariates) was the mother's age. Also, as mentioned in the previous section, for model 1, the point with the highest influence was that with the highest age.  It is also very interesting to note that both the gestation-age and the gestation-parity interactions were significant in this model. Both interaction covariates had positive coefficients. Nonetheless, further study would be required to determine the exact extent and nature of these interactions. 
+
+Consider two women of the same age, ethnicity, height, weight, parity, and gestation, but one of them smokes now while the other stopped smoking. Then, according to this model, the weight of the baby born to the woman who currently smokes is expected to be lower than the weight of the baby born to the woman who has stopped smoking (since all other factors have been held constant). However, most interestingly, this is true irrespective of when the mother stopped smoking (the coefficient + intercept is positive for both "used to smoke" and "smoked until pregnancy"). 
+
+It should also be noted that the BMI is a significant covariate and the coefficient is positive. Thus, advice for prospective parents to reduce the probability of having an underweight baby would be to ensure that the mother has a healthy body-mass index, and to also stop smoking. The model suggests that it is better to quit smoking before pregnancy, however quitting at any point is still helpful. 
+
+## Future Direction
+As noted earlier, a significant portion of the father's data was missing. Due to this, the models did not use information from the father, which is a serious shortcoming since a child's genetic information is determined by both parents. Should this investigation be continued, data which is not missing the height/weight of fathers should be collected. Strategies used to reduce non-response bias could be employed as well (e.g. re-surveying a subset of the non-response group). A limitation was that there were only two socio-economic factors in the variable set (ethnicity and income) and one of them, income, did not have great predictive power. This could be due to the tendency that an individual has to lie about their income if they either make significantly less or significantly more than the average person. 

@@ -1,0 +1,154 @@
+---
+output: pdf_document
+---
+ \setcounter{page}{4}
+where $n_h$ is the number of points selected from stratum $h$, $W_h = \frac{N_h}{N}$ is the proportion of stratum $h$ in the population,
+and $\sigma_h$ is the standard deviation of the response variate (in this case, weight) in stratum h. In this case, we do not know the true value, so we must use an estimate for the standard deviation.
+Since there are multiple categorical variables, optimal allocation has to be used for each categorical variable. Suppose that the desired size of the training set is $n$, and that the number
+of categorical variables is $r$. Optimal allocation was used to sample $\frac{n}{r}$ for each categorical variable $x_1, \ldots, x_r$ (yielding a total training set size of $n$ as desired). 
+
+## Selection of Candidate Models (Automatic and Manual)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+source("setup.R")
+set.seed(6024)
+```
+```{r}
+MSPE <- function(M, train) {
+  print(M$call)
+  print(sum((birth.data$wt[-train] - predict(M, newdata = birth.data[-train,]))^2))
+}
+```
+
+### Model 1 (automatic selection)
+In the previous stage (pre-fitting diagnostics), we were able to reduce the set of covariates to consider when building the model. The set which we are now considering is: gestation, parity, time, number, smoke, mother's age, mother's weight, mother's height, 
+body-mass index, gestation-parity interaction, gestation-mage interaction, income, and mother's ethnicity. Using this set of variables, we will run forward, backwards, and step-wise selection to obtain 3 different models. 
+```{r, include=FALSE}
+#Initial Models
+M0 <- lm(wt ~ 1, data = birth.data, subset = train.ind)
+
+Mmax <- lm(wt ~ gestation + parity + time + number+ smoke + mage + mwt + mht 
+           + I(mwt*703/(mht)^2) + I(gestation*parity) + I(gestation*mage) 
+           + income + meth, data=birth.data, subset = train.ind)
+
+Mstart <- lm(wt ~ gestation + mage + I(mwt*703/(mht)^2) + smoke + mht + mwt
+             + income, data=birth.data, subset = train.ind)
+
+ntot <- dim(birth.data)[1]
+ntrain <- num.train
+
+# forward selection
+Mfwd <- step(object = M0, # starting point model
+scope = list(lower = M0, upper = Mmax), # smallest and largest model
+direction = "forward", 
+trace = FALSE) # trace prints out information
+# backward selection
+Mback <- step(object = Mmax, # starting point model
+scope = list(lower = M0, upper = Mmax),
+direction = "backward", trace = FALSE)
+# stepwise selection (both directions)
+Mstep <- step(object = Mstart,
+scope = list(lower = M0, upper = Mmax),
+direction = "both", trace = FALSE)
+```
+We compare these three models using their respective MSPEs (calculated after training the model on the train set). 
+```{r}
+MSPE(Mfwd, train.ind)
+MSPE(Mstep, train.ind)
+MSPE(Mback, train.ind)
+```
+The model obtained from stepwise selection has the lowest MSPE so we will select it as one of our candidate models. We will first begin by analyzing the significance of each covariate in the presence of other covariates. For brevity's sake, only the non-categorical variables are shown below.
+```{r, include=FALSE}
+non.cat.inds = c(1,2,3,7, 13, 14)
+```
+```{r}
+summary(Mstep)$coefficients[non.cat.inds,]
+```
+For the non-categorical variables, namely mother's age, mother's height, BMI (the body-mass index which is $\Big(\frac{703\times mwt_i}{mht_i^2}\Big)$) the gestation-mage interaction variable and the gestation-parity interaction variable, a $t$-test with the null hypothesis $H_0: \beta_i = 0$ can be used.  The corresponding $p$-values are all strictly less than 0.05, so at the 0.05 significance level, the null hypothesis can be rejected. Hence, each of mother's age, mother's height, BMI, the gestation-mage interaction variable and the gestation-parity interaction variable are significant in the presence of the other covariates. 
+
+For the categorical variables, namely smoke and mother's ethnicity, we must use an F-test to determine if the categorical variables are significant in the presence of the other covariates. 
+```{r, include=FALSE}
+#smoke
+Mstep.smoke.red <- lm(formula = wt ~ mage + I(mwt * 703/(mht)^2)+ mht 
+                  + meth + I(gestation * mage) + I(gestation * parity),
+                  data= birth.data, subset = train.ind)
+```
+```{r}
+anova(Mstep.smoke.red, Mstep)
+```
+The $p$ value is $4.382\times10^{-7}$, so at the 0.05 significance level, we can conclude that the categorical variable smoke is significant in the presence of the other covariates. 
+```{r, include=FALSE}
+#mother's ethnicity
+Mstep.meth.red <- lm(formula = wt ~ mage + I(mwt * 703/(mht)^2)+ mht 
+                  + smoke + I(gestation * mage) + I(gestation * parity),
+                  data= birth.data, subset = train.ind)
+```
+```{r}
+anova(Mstep.meth.red, Mstep)
+```
+The $p$ value is $2.16\times 10^{-7}$, so at the 0.05 significance level, we can conclude that the categorical variable mother's ethnicity is significant in the presence of the other covariates. Thus, in this particular model, all covariates are significant in the presence of each other. 
+
+### Model 2 (Manual)
+The following model was created manually using the evaluation done in the previous stage and intuition. It combines income, smoke and number (which measures the magnitude of the mother's smoking habit) with other biological factors such as gestation, parity, and the mother's height (which was found to be selected frequently by automatic model selection even when different combinations of variables were used). For brevity's sake, only the non-categorical variables are shown below.
+```{r, include=FALSE}
+non.cat.inds <- c(1, 2, 3, 7, 8)
+```
+```{r}
+M.manual <- lm(wt ~ gestation + mht + smoke + I(gestation*parity) + parity + number
+               + income, data = birth.data, subset = train.ind)
+summary(M.manual)$coefficients[non.cat.inds, ]
+```
+For the non-categorical variables, namely gestation, mother's height, parity and the gestation-parity interaction variable,
+a t-test with the null hypothesis $H_0 : \beta_i = 0$ can be used. The corresponding p-values are all strictly less
+than 0.05, so at the 0.05 significance level, the null hypothesis can be rejected. Hence, each of gestation, mother's height,
+parity, and the gestation-parity interaction covariate are significant in the presence of the other covariates.
+```{r, include=FALSE}
+#smoke
+M.manual.smoke.red <-  lm(wt ~ gestation + mht  + I(gestation*parity) + parity + number + income, data = birth.data, subset=train.ind)
+```
+```{r}
+anova(M.manual.smoke.red, M.manual)
+```
+The $p$ value is 0.009, so at the 0.05 significance level, the null hypothesis that smoke is insignificant in the presence of other covariates can be rejected. Hence, the categorical variable smoke is significant in the presence of the other covariates. 
+```{r, include=FALSE}
+#number
+M.manual.number.red <-  lm(wt ~ gestation + mht +smoke + I(gestation*parity) + parity + income, data = birth.data, subset=train.ind)
+```
+```{r}
+anova(M.manual.number.red, M.manual)
+```
+The $p$ value is 0.28, so at the 0.05 significance level, the null hypothesis that number is insignificant in the presence of other covariates cannot be rejected. So we accept the null hypothesis that number is insignificant in the presence of the other covariates
+```{r, include=FALSE}
+#income
+M.manual.income.red <-  lm(wt ~ gestation + mht +smoke + I(gestation*parity) + parity + number, data = birth.data, subset=train.ind)
+```
+```{r}
+anova(M.manual.income.red, M.manual)
+```
+The $p$ value is 0.60, so at the 0.05 significance level, the null hypothesis that income is insignificant in the presence of other covariates cannot be rejected. So we accept the null hypothesis that number is insignificant in the presence of the other covariates. So we further refine the model by removing income and number.
+
+### Refined Model 2
+```{r}
+M.2 <- lm(wt ~ gestation + mht + smoke + I(gestation*parity) + parity, data = birth.data, 
+subset = train.ind)
+summary(M.2)$coefficients[non.cat.inds,]
+```
+Since the p-values corresponding to the non-categorical variables are all strictly less than 0.05, at the 0.05 significance level, 
+the null hypothesis can be rejected. Hence, each of gestation, mother's height, parity, and the gestation-parity interaction covariate are significant in the presence of the other covariates in the refined model. 
+```{r, include=FALSE}
+M.2.smoke.red <-  lm(wt ~ gestation + mht  + I(gestation*parity) + parity, data = birth.data, subset=train.ind)
+```
+```{r}
+anova(M.2.smoke.red, M.2)
+```
+The $p$ value is $2.402\times 10^{-7}$, so at the 0.05 significance level, the null hypothesis that smoke is insignificant in the presence of other covariates can be rejected. Hence, the categorical variable smoke is significant in the presence of the other covariates.  
+To summarize, the two models we will proceed to compare are: 
+
+\textbf{Model 1}:
+```{r}
+Mstep$coefficients
+```
+\textbf{Model 2}:
+```{r}
+M.2$coefficients
+```
